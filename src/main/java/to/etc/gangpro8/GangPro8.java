@@ -12,6 +12,7 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.LineNumberReader;
+import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.stream.Collectors;
@@ -125,12 +126,16 @@ public class GangPro8 {
 				//--
 			}
 
-			switch(m_format) {
+			switch(m_format){
 				default:
 					throw new IllegalStateException("Unknown format: " + m_format);
 
 				case binary:
 					writeBinaryOutput();
+					break;
+
+				case intel:
+					writeIntelOutput();
 					break;
 			}
 
@@ -154,6 +159,27 @@ public class GangPro8 {
 		}
 	}
 
+	private void writeIntelOutput() {
+		try(OutputStreamWriter osw = new OutputStreamWriter(new FileOutputStream(new File(m_downloadFile)), StandardCharsets.UTF_8)) {
+			m_baos.close();
+			byte[] bytes = m_baos.toByteArray();
+			int off = 0;
+			while(off < bytes.length) {
+				String ba = toIntelHex(bytes, off, 0x20, off);
+				osw.write(ba);
+				osw.write(System.lineSeparator());
+				off += 0x20;
+			}
+			//-- And the last one
+			osw.write(":00000001ff");
+			osw.write(System.lineSeparator());
+			System.out.println("Written 0x" + Integer.toHexString(bytes.length) + " (" + bytes.length + ") bytes to " + m_downloadFile + " in Intel Hex format");
+		} catch(Exception x) {
+			throw new MessageException("Failed to write file: " + x);
+		}
+	}
+
+
 	private boolean runStates() {
 		//-- Do we need hex chars?
 		if(m_hexToDo > 0) {
@@ -161,7 +187,7 @@ public class GangPro8 {
 			return true;
 		}
 
-		switch(m_state) {
+		switch(m_state){
 			default:
 				throw new IllegalStateException("Unexpected state: " + m_state);
 
@@ -294,7 +320,6 @@ public class GangPro8 {
 		}
 	}
 
-
 	private byte[] m_buffer = new byte[16];
 
 	private int m_readIndex;
@@ -316,6 +341,48 @@ public class GangPro8 {
 	}
 
 
+	/*----------------------------------------------------------------------*/
+	/*	CODING:	Support code.												*/
+	/*----------------------------------------------------------------------*/
+
+	private int m_writeSum;
+
+	private String toIntelHex(byte[] buf, int off, int len, int outputAddress) {
+		if(len == 0 || len > 255)
+			throw new IllegalStateException("Bad length");
+		m_writeSum = 0;
+		StringBuilder sb = new StringBuilder();
+		sb.append(':');
+		appendByte(sb, len);                        // byte count
+		appendByte(sb, outputAddress >> 16);    // address
+		appendByte(sb, outputAddress);
+		appendByte(sb, 0);                    // Record type
+		int end = off + len;
+		if(end > buf.length)
+			end = buf.length - off;
+		if(end <= 0)
+			throw new IllegalStateException("Invalid buffer size/length");
+		while(off < end) {
+			appendByte(sb, buf[off++]);                // data bytes
+		}
+		int sum = -m_writeSum;
+		appendByte(sb, sum);                        // 2-complement of sum
+		return sb.toString();
+	}
+
+	private void appendByte(StringBuilder sb, int value) {
+		appendNibble(sb, value >> 4);
+		appendNibble(sb, value);
+		m_writeSum += (value & 0xff);
+	}
+
+	private void appendNibble(StringBuilder sb, int value) {
+		sb.append(Character.forDigit(value & 0xff, 16));
+	}
+
+	/**
+	 * Open serial port for use.
+	 */
 	private SerialPort open() throws Exception {
 		try {
 			SerialPort port = SerialPort.getCommPort(m_serialPort);
