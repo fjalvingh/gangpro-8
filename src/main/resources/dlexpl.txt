@@ -1,0 +1,6 @@
+Make the Gangpro-8 send the content of the EPROM/PROM/ROM as follows:
+* Select the correct device type with the DEVICE key
+* Insert the EPROM to read in the MASTER socket (SKTM).
+* MAKE SURE THAT ALL OTHER SOCKETS ARE EMPTY!!
+* Press the SETUP key multiple times until the display says "UPLOAD".
+This should start the upload, I'll tell you when I'm starting to see data.
