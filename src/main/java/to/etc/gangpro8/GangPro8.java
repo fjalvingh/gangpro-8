@@ -119,8 +119,9 @@ public class GangPro8 {
 			m_expectedAddress = 0;
 			m_lineNumber = 1;
 
-			byte[] cmd = "U\r\n".getBytes(StandardCharsets.UTF_8);
+			byte[] cmd = "U".getBytes(StandardCharsets.UTF_8);        // Set UPLOAD mode (does not work on my device)
 			port.writeBytes(cmd, cmd.length);
+			port.setRTS();
 
 			while(runStates()) {
 				//--
