@@ -1,6 +1,6 @@
 # Gangpro-8 vintage EPROM Programmer software
 
-![The Gangpro-8 programmer from Logical Devices](/blobs/gangpro.jpg)
+![The Gangpro-8 programmer from Logical Devices](https://raw.githubusercontent.com/fjalvingh/gangpro-8/master/gangpro8.jpg)
 
 The Gangpro-8 is a vintage (around 1981) gang programmer made by [Logical Devices](http://www.logicaldevices.com/). It
 allows copying a single master (E)(P)ROM to one to eight others. The software for this device could not be found so
