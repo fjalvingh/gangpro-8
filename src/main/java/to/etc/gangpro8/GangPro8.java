@@ -119,7 +119,7 @@ public class GangPro8 {
 			m_expectedAddress = 0;
 			m_lineNumber = 1;
 
-			byte[] cmd = "u\r\n".getBytes(StandardCharsets.UTF_8);
+			byte[] cmd = "U\r\n".getBytes(StandardCharsets.UTF_8);
 			port.writeBytes(cmd, cmd.length);
 
 			while(runStates()) {
@@ -377,7 +377,7 @@ public class GangPro8 {
 	}
 
 	private void appendNibble(StringBuilder sb, int value) {
-		sb.append(Character.forDigit(value & 0xff, 16));
+		sb.append(Character.forDigit(value & 0xf, 16));
 	}
 
 	/**
