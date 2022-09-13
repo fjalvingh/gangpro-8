@@ -8,6 +8,7 @@ import org.kohsuke.args4j.Option;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -15,6 +16,7 @@ import java.io.LineNumberReader;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -22,11 +24,20 @@ import java.util.stream.Collectors;
  * Created on 06-06-21.
  */
 public class GangPro8 {
+	private static final long SOH_TIMEOUT = 10 * 1000;
+
+	private static final long ACK_TIMEOUT = 10 * 1000;
+
+	private static final long CTS_TIMEOUT = 5 * 1000;
+
 	@Option(name = "-p", aliases = {"--serial"}, usage = "The serial port to use, use something like /dev/ttyUSB0 on Linux", required = true)
 	private String m_serialPort;
 
-	@Option(name = "-d", aliases = {"--download"}, usage = "Download the content of the MASTER eprom socket to a file")
+	@Option(name = "-r", aliases = {"--read"}, usage = "Read the content of the MASTER eprom socket to a file")
 	private String m_downloadFile;
+
+	@Option(name = "-w", aliases = {"--write"}, usage = "Write the specified file to the EPROM")
+	private File m_writeFile;
 
 	@Option(name = "-f", aliases = {"--format"}, usage = "Format for the file: either binary or intel")
 	private Format m_format = Format.binary;
@@ -59,8 +70,10 @@ public class GangPro8 {
 		try {
 			if(m_downloadFile != null) {
 				runDownload();
+			} else if(m_writeFile != null) {
+				runUpload();
 			} else {
-				System.err.println("No action specified: expecting --download or --upload");
+				System.err.println("No action specified: expecting --read or --write");
 				System.exit(10);
 			}
 		} catch(MessageException mx) {
@@ -68,6 +81,157 @@ public class GangPro8 {
 			System.exit(10);
 		}
 	}
+
+	/*----------------------------------------------------------------------*/
+	/*	CODING:	Write processing.											*/
+	/*----------------------------------------------------------------------*/
+
+	private int m_badSohMessageCount;
+
+	private void runUpload() throws Exception {
+		byte[] data = loadFile();
+
+		SerialPort port = m_port = open();
+		try {
+			//explain("dlexpl");
+			System.out.println("\nAsking GangPro to enter programming mode..");
+
+			byte[] cmd = "T".getBytes(StandardCharsets.UTF_8);        // PROGRAM mode
+			port.writeBytes(cmd, cmd.length);
+
+			int offset = 0;
+			while(offset < data.length) {
+				//-- Prepare for sending a new record.
+				int todo = Math.min(16, data.length - offset);
+				String record = toIntelHex(data, offset, todo, offset);
+
+				sendAndRetryRecord(port, record);
+			}
+
+
+			port.setRTS();
+
+
+		} finally {
+			try {
+				port.closePort();
+			} catch(Exception x) {
+				System.err.println("Exception closing the serial port: " + x);
+			}
+		}
+	}
+
+	static private final byte[] NULNUL = new byte[]{0x0, 0x0};
+
+	private enum AckOrNack {
+		Ack, Nack
+	}
+
+	private void sendAndRetryRecord(SerialPort port, String record) throws Exception {
+		waitForSOH();
+
+		for(; ; ) {
+			port.setRTS();
+
+			waitCts(port);
+			m_port.writeBytes(NULNUL, 2);
+			waitCts(port);
+			byte[] recordBytes = record.getBytes(StandardCharsets.UTF_8);
+			m_port.writeBytes(recordBytes, recordBytes.length);
+			port.clearRTS();
+
+			AckOrNack ackOrNack = waitAckOrNack(port);
+			if(ackOrNack == AckOrNack.Ack)
+				return;
+			Thread.sleep(10);
+		}
+	}
+
+	private AckOrNack waitAckOrNack(SerialPort port) throws Exception {
+		long ets = System.currentTimeMillis() + SOH_TIMEOUT;
+		for(; ; ) {
+			int read = m_port.readBytes(m_buffer, 1);
+			if(read == 0) {
+				if(System.currentTimeMillis() >= ets)
+					throw new MessageException("Timneout waiting for SOH (new record request) from GangPro");
+
+				Thread.sleep(100);
+			}
+			if(m_buffer[0] == 0x15) {                            // NAK?
+				return AckOrNack.Nack;
+			} else if(m_buffer[0] == 0x06) {                    // ACK?
+				return AckOrNack.Ack;
+			} else {
+				if(m_badSohMessageCount < 5) {
+					m_badSohMessageCount++;
+					System.err.println("Unexpected char " + Integer.toHexString(m_buffer[0] & 0xff) + " while waiting for ACK/NAK");
+				}
+			}
+		}
+	}
+
+	private void waitCts(SerialPort port) throws Exception {
+		if(port.getCTS())
+			return;
+
+		long ets = System.currentTimeMillis() + CTS_TIMEOUT;
+		while(!port.getCTS()) {
+			Thread.sleep(100);
+			if(System.currentTimeMillis() >= ets)
+				throw new MessageException("Timeout waiting for CTS to clear");
+		}
+	}
+
+	private void waitForSOH() throws Exception {
+		long ets = System.currentTimeMillis() + SOH_TIMEOUT;
+		for(; ; ) {
+			int read = m_port.readBytes(m_buffer, 1);
+			if(read == 0) {
+				if(System.currentTimeMillis() >= ets)
+					throw new MessageException("Timneout waiting for SOH (new record request) from GangPro");
+
+				Thread.sleep(100);
+			}
+			if(m_buffer[0] == 0x01) {                            // Got the SOH (ascii 0x01)?
+				return;
+			} else {
+				if(m_badSohMessageCount < 5) {
+					m_badSohMessageCount++;
+					System.err.println("Unexpected char " + Integer.toHexString(m_buffer[0] & 0xff) + " while waiting for SOH");
+				}
+			}
+		}
+	}
+
+	/**
+	 * Read the data into memory, checking the format.
+	 */
+	private byte[] loadFile() throws Exception {
+		switch(m_format){
+			default:
+				throw new MessageException("Unsupported format '" + m_format + "'");
+
+			case binary:
+				return readBinary();
+		}
+
+
+	}
+
+	private byte[] readBinary() throws Exception {
+		File writeFile = Objects.requireNonNull(m_writeFile);
+		if(!writeFile.exists() || !writeFile.isFile() || !writeFile.canRead())
+			throw new MessageException(writeFile + " does not exist, is not a file or cannot be read");
+		try(InputStream is = new FileInputStream(writeFile)) {
+			byte[] bytes = is.readAllBytes();
+			return bytes;
+		}
+	}
+
+	/*----------------------------------------------------------------------*/
+	/*	CODING:	Read processing												*/
+	/*----------------------------------------------------------------------*/
+
 
 	enum HexState {
 		Colon,
